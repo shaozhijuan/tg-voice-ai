@@ -100,8 +100,22 @@ async function generateAIResponse(prompt: string, env: Env): Promise<string> {
 // 处理 Telegram 更新请求
 async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 	try {
+		const chatId = update.message.chat.id;
+		const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
 		if (!update.message?.voice) {
-			return new Response('No voice message found', { status: 400 });
+			const userText = update.message.text; // 读取文字内容
+
+			console.log('No voice message found');
+			const aiResponse = await generateAIResponse(userText, env);
+			const telegramResponse = await fetch(messageUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					chat_id: chatId,
+					text: aiResponse,
+				}),
+			});
+			return new Response('OK');
 		}
 
 		const fileId = update.message.voice.file_id;
@@ -118,14 +132,13 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 		const aiResponse = await generateAIResponse(transcription, env);
 
 		// 回复用户转录结果和 AI 回复内容
-		const chatId = update.message.chat.id;
-		const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
+
 		const telegramResponse = await fetch(messageUrl, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				chat_id: chatId,
-				text: `Transcription: ${transcription}  AI Response: ${aiResponse}`,
+				text: `Transcription: ${transcription}  \n ${aiResponse}`,
 			}),
 		});
 		if (!telegramResponse.ok) {
@@ -144,6 +157,8 @@ export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		// Worker 运行时的 URL，需替换为实际 Worker 部署后的公共域名
 		const workerUrl = request.url.replace('/init', '');
+		console.log('Worker URL:', workerUrl);
+		// const workerUrl = 'https://tg.14790897.xyz';
 
 		// 确保在 Worker 部署时进行 Webhook 注册
 		if (request.method === 'GET' && new URL(request.url).pathname === '/init') {
@@ -161,7 +176,7 @@ export default {
 			return await handleTelegramUpdate(update, env); // 处理 Telegram 更新
 		} catch (error) {
 			console.error('Error handling Telegram update:', error);
-			return new Response(`Error:${error}`, { status: 500 });
+			return new Response('OK');
 		}
 	},
 } satisfies ExportedHandler<Env>;
