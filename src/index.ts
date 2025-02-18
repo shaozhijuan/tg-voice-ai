@@ -7,6 +7,7 @@ export interface Env {
 	AI: Ai; // Cloudflare AI 模型服务
 	tg_token: string; // Telegram 机器人 Token
 	tg_chat_id: string; // Telegram 目标聊天 ID
+	siliconflow_token: string; // SiliconFlow API Token
 }
 
 export interface TelegramFileResponse {
@@ -17,6 +18,52 @@ export interface TelegramFileResponse {
 }
 
 const WHISPER_MODEL = '@cf/openai/whisper'; // Whisper 模型路径
+async function generateVoice(text: string, env: Env): Promise<Blob> {
+	const apiUrl = 'https://api.siliconflow.cn/v1/audio/speech';
+	const response = await fetch(apiUrl, {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${env.siliconflow_token}`, // 替换为实际的 API Token
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({
+			model: 'RVC-Boss/GPT-SoVITS',
+			input: text,
+			voice: 'RVC-Boss/GPT-SoVITS:anna', // 声音模型
+			response_format: 'mp3', // 返回音频格式
+			sample_rate: 32000, // 采样率
+			stream: false, // 静态文件
+			speed: 1, // 播放速度
+			gain: 0, // 音量增益
+		}),
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to generate voice: ${await response.text()}`);
+	}
+	console.log('Voice generated:');
+	return await response.blob(); // 返回音频数据作为 Blob
+}
+// 上传文件至 Telegram
+async function uploadVoiceToTelegram(blob: Blob, chatId: number, env: Env): Promise<Response> {
+	const tgApiUrl = `https://api.telegram.org/bot${env.tg_token}/sendVoice`;
+
+	const formData = new FormData();
+	formData.append('chat_id', chatId.toString());
+	formData.append('voice', blob, 'response.mp3'); // 将音频文件附加到 FormData 中，命名为 response.mp3
+
+	const response = await fetch(tgApiUrl, {
+		method: 'POST',
+		body: formData,
+	});
+
+	if (!response.ok) {
+		console.error('Failed to send voice to Telegram:', await response.text());
+		throw new Error('Failed to send voice to Telegram');
+	}
+	console.log('Voice sent to Telegram:', await response.text());
+	return response;
+}
 
 // 使用 Whisper 模型进行语音转录
 async function transcribeAudio(blob: Blob, env: Env): Promise<string> {
@@ -90,7 +137,7 @@ async function generateAIResponse(prompt: string, env: Env): Promise<string> {
 	const workersai = createWorkersAI({ binding: env.AI });
 	const result = await generateText({
 		model: workersai('@cf/meta/llama-2-7b-chat-int8'), // 使用指定的 AI 模型
-		prompt: `你要扮演一个日常聊天的机器人，这是用户之前的聊天记录，由于是语音输入可能存在不准的问题请自行推断它的原意：${prompt}`, // 把识别出的文本作为输入 Prompt
+		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在语音识别问题或者表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
 	});
 
 	const response = result.text; // 获取完整的 AI 回复
@@ -115,6 +162,11 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 					text: aiResponse,
 				}),
 			});
+			// 生成语音回复
+			const voiceBlob = await generateVoice(aiResponse, env);
+
+			// 上传语音至 Telegram
+			await uploadVoiceToTelegram(voiceBlob, chatId, env);
 			return new Response('OK');
 		}
 
@@ -143,12 +195,17 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 		});
 		if (!telegramResponse.ok) {
 			console.error('Failed to send message to Telegram:', await telegramResponse.text());
-			return new Response('Failed to send message to Telegram', { status: 500 });
+			return new Response('OK');
 		}
+		// 生成语音回复
+		const voiceBlob = await generateVoice(aiResponse, env);
+
+		// 上传语音至 Telegram
+		await uploadVoiceToTelegram(voiceBlob, chatId, env);
 		return new Response('OK');
 	} catch (error: any) {
 		console.error('Error in handleTelegramUpdate:', error);
-		return new Response(`Error: ${error}`, { status: 500 });
+		return new Response('OK');
 	}
 }
 
