@@ -1,0 +1,20 @@
+{
+  "name": "my-first-worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled",
+    "start": "wrangler dev --test-scheduled",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250121.0",
+    "typescript": "^5.5.2",
+    "wrangler": "^3.104.0"
+  },
+  "dependencies": {
+    "coingecko-api-v3": "^0.0.29",
+    "workers-ai-provider": "^0.0.11"
+  }
+}
