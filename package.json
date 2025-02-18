@@ -13,8 +13,7 @@
     "typescript": "^5.5.2",
     "wrangler": "^3.104.0"
   },
-  "dependencies": {
-    "coingecko-api-v3": "^0.0.29",
+	"dependencies": {
     "workers-ai-provider": "^0.0.11"
   }
 }

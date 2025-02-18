@@ -23,6 +23,7 @@ jobs:
       # Step 3: Install Wrangler
       - name: Install Wrangler
         run: npm install -g wrangler
+          npm install
 
       # Step 4: Authenticate Wrangler
       - name: Authenticate Wrangler
