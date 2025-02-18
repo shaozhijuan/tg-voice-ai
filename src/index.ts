@@ -18,6 +18,8 @@ export interface TelegramFileResponse {
 }
 
 const WHISPER_MODEL = '@cf/openai/whisper'; // Whisper 模型路径
+const CHAT_MODEL = '@cf/meta/llama-2-7b-chat-int8'; // Llama 模型路径
+const TTS_MODEL = 'RVC-Boss/GPT-SoVITS'; // Whisper 模型路径
 async function generateVoice(text: string, env: Env): Promise<Blob> {
 	const apiUrl = 'https://api.siliconflow.cn/v1/audio/speech';
 	const response = await fetch(apiUrl, {
@@ -27,9 +29,9 @@ async function generateVoice(text: string, env: Env): Promise<Blob> {
 			'Content-Type': 'application/json',
 		},
 		body: JSON.stringify({
-			model: 'RVC-Boss/GPT-SoVITS',
+			model: TTS_MODEL,
 			input: text,
-			voice: 'RVC-Boss/GPT-SoVITS:anna', // 声音模型
+			voice: `${TTS_MODEL}:anna`, // 声音模型
 			response_format: 'mp3', // 返回音频格式
 			sample_rate: 32000, // 采样率
 			stream: false, // 静态文件
@@ -136,7 +138,7 @@ async function getTelegramFileLink(fileId: string, env: Env): Promise<string> {
 async function generateAIResponse(prompt: string, env: Env): Promise<string> {
 	const workersai = createWorkersAI({ binding: env.AI });
 	const result = await generateText({
-		model: workersai('@cf/meta/llama-2-7b-chat-int8'), // 使用指定的 AI 模型
+		model: workersai(CHAT_MODEL), // 使用指定的 AI 模型
 		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在语音识别问题或者表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
 	});
 
