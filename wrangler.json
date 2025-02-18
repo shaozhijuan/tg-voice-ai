@@ -16,12 +16,6 @@
 	},
 	"compatibility_flags": [
 		"nodejs_compat"
-	],
-	"routes": [
-		{
-			"pattern": "voiceai.14790897.xyz",
-			"custom_domain": true
-		}
 	]
 	/**
 	 * Smart Placement
