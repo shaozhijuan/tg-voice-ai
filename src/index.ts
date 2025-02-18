@@ -1,5 +1,6 @@
 import { createWorkersAI } from 'workers-ai-provider';
 import { streamText } from 'ai';
+import { generateText } from 'ai';
 
 export interface Env {
 	// aivoice: KVNamespace; // 可用于存储转录结果
@@ -7,12 +8,14 @@ export interface Env {
 	tg_token: string; // Telegram 机器人 Token
 	tg_chat_id: string; // Telegram 目标聊天 ID
 }
+
 export interface TelegramFileResponse {
 	ok: boolean;
 	result: {
 		file_path: string;
 	};
 }
+
 const WHISPER_MODEL = '@cf/openai/whisper'; // Whisper 模型路径
 
 // 使用 Whisper 模型进行语音转录
@@ -23,6 +26,7 @@ async function transcribeAudio(blob: Blob, env: Env): Promise<string> {
 	});
 	return response.text; // 返回转录文本
 }
+
 async function getWebhookInfo(env: Env): Promise<any> {
 	const webhookInfoUrl = `https://api.telegram.org/bot${env.tg_token}/getWebhookInfo`;
 
@@ -30,7 +34,9 @@ async function getWebhookInfo(env: Env): Promise<any> {
 	const data = await response.json();
 
 	return data;
-} // 修改注册逻辑，避免重复注册
+}
+
+// 修改注册逻辑，避免重复注册
 async function registerTelegramWebhook(workerUrl: string, env: Env): Promise<any> {
 	const webhookInfo = await getWebhookInfo(env);
 
@@ -53,6 +59,7 @@ async function registerTelegramWebhook(workerUrl: string, env: Env): Promise<any
 
 	return await response.json();
 }
+
 // 获取 Telegram 文件的下载链接
 async function getTelegramFileLink(fileId: string, env: Env): Promise<string> {
 	const tgApiUrl = `https://api.telegram.org/bot${env.tg_token}/getFile?file_id=${fileId}`;
@@ -65,6 +72,18 @@ async function getTelegramFileLink(fileId: string, env: Env): Promise<string> {
 
 	const filePath = data.result.file_path;
 	return `https://api.telegram.org/file/bot${env.tg_token}/${filePath}`;
+}
+
+// 生成 AI 回复
+async function generateAIResponse(prompt: string, env: Env): Promise<string> {
+	const workersai = createWorkersAI({ binding: env.AI });
+	const result = await generateText({
+		model: workersai('@cf/meta/llama-2-7b-chat-int8'), // 使用指定的 AI 模型
+		prompt: `你要扮演一个日常聊天的机器人，这是用户之前的聊天记录，由于是语音输入可能存在不准的问题请自行推断它的原意：${prompt}`, // 把识别出的文本作为输入 Prompt
+	});
+
+	const response = result.text; // 获取完整的 AI 回复
+	return response;
 }
 
 // 处理 Telegram 更新请求
@@ -82,7 +101,11 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 
 	// 转录语音文件
 	const transcription = await transcribeAudio(blob, env);
-	// 回复用户转录结果
+
+	// 基于转录结果生成 AI 回复
+	const aiResponse = await generateAIResponse(transcription, env);
+
+	// 回复用户转录结果和 AI 回复内容
 	const chatId = update.message.chat.id;
 	const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
 	await fetch(messageUrl, {
@@ -90,13 +113,12 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			chat_id: chatId,
-			text: `Transcription: ${transcription}`,
+			text: `Transcription: ${transcription}\nAI Response: ${aiResponse}`,
 		}),
 	});
 
 	return new Response('OK');
 }
-
 
 export default {
 	// 处理 Telegram Webhook 请求
