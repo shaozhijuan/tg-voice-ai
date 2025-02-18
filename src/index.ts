@@ -35,14 +35,25 @@ async function getWebhookInfo(env: Env): Promise<any> {
 
 	return data;
 }
+// 获取聊天历史记录
+async function getChatHistory(chatId: number, env: Env): Promise<string[]> {
+	const tgApiUrl = `https://api.telegram.org/bot${env.tg_token}/getUpdates`;
 
+	const res = await fetch(tgApiUrl);
+	const { result } = (await res.json()) as any;
+
+	// 筛选出与当前 chatId 相关的消息
+	const messages = result.filter((update: any) => update.message?.chat.id === chatId).map((update: any) => update.message.text || ''); // 提取消息的文本内容
+
+	return messages; // 返回聊天历史记录
+}
 // 修改注册逻辑，避免重复注册
 async function registerTelegramWebhook(workerUrl: string, env: Env): Promise<any> {
 	const webhookInfo = await getWebhookInfo(env);
 
 	if (webhookInfo.result?.url === workerUrl) {
 		// 当前 Webhook 已正确注册，无需重新设置
-		return { ok: true, result: 'Webhook already registered' };
+		return { ok: true, result: 'Webhook already registered', webhookInfo: webhookInfo.result };
 	}
 
 	const webhookApiUrl = `https://api.telegram.org/bot${env.tg_token}/setWebhook`;
@@ -88,43 +99,51 @@ async function generateAIResponse(prompt: string, env: Env): Promise<string> {
 
 // 处理 Telegram 更新请求
 async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
-	if (!update.message?.voice) {
-		return new Response('No voice message found', { status: 400 });
+	try {
+		if (!update.message?.voice) {
+			return new Response('No voice message found', { status: 400 });
+		}
+
+		const fileId = update.message.voice.file_id;
+
+		// 获取语音文件下载链接
+		const fileUrl = await getTelegramFileLink(fileId, env);
+		const audioResponse = await fetch(fileUrl);
+		const blob = await audioResponse.blob();
+
+		// 转录语音文件
+		const transcription = await transcribeAudio(blob, env);
+
+		// 基于转录结果生成 AI 回复
+		const aiResponse = await generateAIResponse(transcription, env);
+
+		// 回复用户转录结果和 AI 回复内容
+		const chatId = update.message.chat.id;
+		const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
+		const telegramResponse = await fetch(messageUrl, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				chat_id: chatId,
+				text: `Transcription: ${transcription}\nAI Response: ${aiResponse}`,
+			}),
+		});
+		if (!telegramResponse.ok) {
+			console.error('Failed to send message to Telegram:', await telegramResponse.text());
+			return new Response('Failed to send message to Telegram', { status: 500 });
+		}
+		return new Response('OK');
+	} catch (error: any) {
+		console.error('Error in handleTelegramUpdate:', error);
+		return new Response(`Error: ${error}`, { status: 500 });
 	}
-
-	const fileId = update.message.voice.file_id;
-
-	// 获取语音文件下载链接
-	const fileUrl = await getTelegramFileLink(fileId, env);
-	const audioResponse = await fetch(fileUrl);
-	const blob = await audioResponse.blob();
-
-	// 转录语音文件
-	const transcription = await transcribeAudio(blob, env);
-
-	// 基于转录结果生成 AI 回复
-	const aiResponse = await generateAIResponse(transcription, env);
-
-	// 回复用户转录结果和 AI 回复内容
-	const chatId = update.message.chat.id;
-	const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
-	await fetch(messageUrl, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			chat_id: chatId,
-			text: `Transcription: ${transcription}\nAI Response: ${aiResponse}`,
-		}),
-	});
-
-	return new Response('OK');
 }
 
 export default {
 	// 处理 Telegram Webhook 请求
 	async fetch(request: Request, env: Env): Promise<Response> {
 		// Worker 运行时的 URL，需替换为实际 Worker 部署后的公共域名
-		const workerUrl = 'voiceai.14790897.xyz';
+		const workerUrl = request.url.replace('/init', '');
 
 		// 确保在 Worker 部署时进行 Webhook 注册
 		if (request.method === 'GET' && new URL(request.url).pathname === '/init') {
@@ -134,16 +153,15 @@ export default {
 				headers: { 'Content-Type': 'application/json' },
 			});
 		}
-		if (request.method !== 'POST') {
-			return new Response('Invalid request method', { status: 405 });
-		}
 
-		const update = await request.json(); // 获取 Telegram 更新内容
 		try {
+			const update = await request.json(); // 获取 Telegram 更新内容
+			console.log('Received Telegram update:', update);
+			// return new Response('你好，我是语音转文字机器人，我会将你的语音转换为文字并回复给你。', { status: 200 });
 			return await handleTelegramUpdate(update, env); // 处理 Telegram 更新
 		} catch (error) {
 			console.error('Error handling Telegram update:', error);
-			return new Response('Internal Server Error', { status: 500 });
+			return new Response(`Error:${error}`, { status: 500 });
 		}
 	},
 } satisfies ExportedHandler<Env>;
