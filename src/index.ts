@@ -125,7 +125,7 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				chat_id: chatId,
-				text: `Transcription: ${transcription}\nAI Response: ${aiResponse}`,
+				text: `Transcription: ${transcription}  AI Response: ${aiResponse}`,
 			}),
 		});
 		if (!telegramResponse.ok) {
