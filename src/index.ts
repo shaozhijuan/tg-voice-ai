@@ -8,6 +8,7 @@ export interface Env {
 	tg_token: string; // Telegram 机器人 Token
 	tg_chat_id: string; // Telegram 目标聊天 ID
 	siliconflow_token: string; // SiliconFlow API Token
+	tgvoicechat: KVNamespace;
 }
 
 export interface TelegramFileResponse {
@@ -85,24 +86,17 @@ async function getWebhookInfo(env: Env): Promise<any> {
 
 	return data;
 }
-// 获取聊天历史记录
+
+async function storeChatHistory(chatId: number, messages: Array<{ role: string; text: string }>, env: Env): Promise<void> {
+	const key = `chat_${chatId}`; // 使用聊天 ID 作为存储键
+	const history = JSON.parse((await env.tgvoicechat.get(key)) || '[]'); // 从 KV 获取当前聊天记录
+	const updatedHistory = [...history, ...messages].slice(-50); // 只保留最近 50 条记录
+	await env.tgvoicechat.put(key, JSON.stringify(updatedHistory)); // 存回 KV
+}
 async function getChatHistory(chatId: number, env: Env): Promise<Array<{ role: string; text: string }>> {
-	const tgApiUrl = `https://api.telegram.org/bot${env.tg_token}/getUpdates`;
-
-	const res = await fetch(tgApiUrl);
-	const { result } = (await res.json()) as any;
-
-	// 提取和过滤相关的聊天消息
-	const messages = result
-		.filter((update: any) => update.message?.chat.id === chatId) // 筛选当前聊天的消息
-		.map((update: any) => ({
-			role: update.message.from?.id === chatId ? 'user' : 'bot', // 如果消息是用户发出，则标记为'user'，否则为'bot'
-			text: update.message.text || '', // 提取消息文本内容
-		}))
-		.filter((message: { role: string; text: string }) => message.text) // 排除空消息
-		.slice(-10); // 限制历史记录为最近的10条消息
-	console.log(`Chat history for chat ID ${chatId}:`, messages);
-	return messages; // 返回聊天历史记录，包括角色和内容
+	const key = `chat_${chatId}`; // 与存储消息时使用的键保持一致
+	const history = JSON.parse((await env.tgvoicechat.get(key)) || '[]'); // 从 KV 中解析历史数据
+	return history; // 返回聊天记录数组
 }
 
 // 修改注册逻辑，避免重复注册
@@ -146,13 +140,17 @@ async function getTelegramFileLink(fileId: string, env: Env): Promise<string> {
 // 生成 AI 回复
 async function generateAIResponse(prompt: string, chatHistory: Array<{ role: string; text: string }>, env: Env): Promise<string> {
 	const workersai = createWorkersAI({ binding: env.AI });
-
+	// 限制聊天历史为最近 10 条，并格式化为可读形式
+	const limitedHistory = chatHistory.slice(-10); // 只保留最近 10 条记录
+	const formattedHistory = limitedHistory
+		.map(({ role, text }) => `${role === 'user' ? 'user' : 'aibot(me)'}: ${text}`) // 格式化记录
+		.join('\n'); // 以换行符分隔
 	// 拼接聊天历史作为上下文
 	const result = await generateText({
 		model: workersai(CHAT_MODEL), // 使用指定的 AI 模型
-		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户最近的聊天记录：${chatHistory},以下是用户当前的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
+		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户最近的聊天记录：${formattedHistory},以下是用户当前的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
 	});
-
+	console.log(`formattedHistory in generateAIResponse: ${formattedHistory}`);
 	const response = result.text; // 获取完整的 AI 回复
 	return response;
 }
@@ -162,7 +160,13 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 	try {
 		const chatId = update.message.chat.id;
 		const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
-		const chatHistory = await getChatHistory(chatId, env);
+		let chatHistory: Array<{ role: string; text: string }> = [];
+		try {
+			chatHistory = await getChatHistory(chatId, env); // 获取聊天历史
+		} catch (err) {
+			console.error('Failed to fetch chat history:', err);
+			chatHistory = []; // 使用空聊天历史作为兜底
+		}
 		if (!update.message?.voice) {
 			const userText = update.message.text; // 读取文字内容
 
@@ -176,6 +180,14 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 					text: aiResponse,
 				}),
 			});
+			await storeChatHistory(
+				chatId,
+				[
+					{ role: 'user', text: userText }, // 用户消息
+					{ role: 'bot', text: aiResponse }, // AI 回复
+				],
+				env
+			);
 			// 生成语音回复
 			const voiceBlob = await generateVoice(aiResponse, env);
 
@@ -204,13 +216,21 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				chat_id: chatId,
-				text: `Transcription: ${transcription}  \n ${aiResponse}`,
+				text: `Your Transcription: ${transcription}  \n ${aiResponse}`,
 			}),
 		});
 		if (!telegramResponse.ok) {
 			console.error('Failed to send message to Telegram:', await telegramResponse.text());
 			return new Response('OK');
 		}
+		await storeChatHistory(
+			chatId,
+			[
+				{ role: 'user', text: transcription }, // 用户消息
+				{ role: 'bot', text: aiResponse }, // AI 回复
+			],
+			env
+		);
 		// 生成语音回复
 		const voiceBlob = await generateVoice(aiResponse, env);
 
@@ -226,6 +246,9 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 export default {
 	// 处理 Telegram Webhook 请求
 	async fetch(request: Request, env: Env): Promise<Response> {
+		if (!env.tg_token || !env.siliconflow_token || !env.AI) {
+			throw new Error('Environment variables are not properly configured.');
+		}
 		// Worker 运行时的 URL，需替换为实际 Worker 部署后的公共域名
 		const workerUrl = request.url.replace('/init', '');
 		console.log('Worker URL:', workerUrl);
