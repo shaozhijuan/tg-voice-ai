@@ -20,6 +20,7 @@ export interface TelegramFileResponse {
 const WHISPER_MODEL = '@cf/openai/whisper'; // Whisper 模型路径
 const CHAT_MODEL = '@cf/meta/llama-2-7b-chat-int8'; // Llama 模型路径
 const TTS_MODEL = 'RVC-Boss/GPT-SoVITS'; // tts 模型路径
+
 async function generateVoice(text: string, env: Env): Promise<Blob> {
 	const apiUrl = 'https://api.siliconflow.cn/v1/audio/speech';
 	const response = await fetch(apiUrl, {
@@ -85,17 +86,25 @@ async function getWebhookInfo(env: Env): Promise<any> {
 	return data;
 }
 // 获取聊天历史记录
-async function getChatHistory(chatId: number, env: Env): Promise<string[]> {
+async function getChatHistory(chatId: number, env: Env): Promise<Array<{ role: string; text: string }>> {
 	const tgApiUrl = `https://api.telegram.org/bot${env.tg_token}/getUpdates`;
 
 	const res = await fetch(tgApiUrl);
 	const { result } = (await res.json()) as any;
 
-	// 筛选出与当前 chatId 相关的消息
-	const messages = result.filter((update: any) => update.message?.chat.id === chatId).map((update: any) => update.message.text || ''); // 提取消息的文本内容
-
-	return messages; // 返回聊天历史记录
+	// 提取和过滤相关的聊天消息
+	const messages = result
+		.filter((update: any) => update.message?.chat.id === chatId) // 筛选当前聊天的消息
+		.map((update: any) => ({
+			role: update.message.from?.id === chatId ? 'user' : 'bot', // 如果消息是用户发出，则标记为'user'，否则为'bot'
+			text: update.message.text || '', // 提取消息文本内容
+		}))
+		.filter((message: { role: string; text: string }) => message.text) // 排除空消息
+		.slice(-10); // 限制历史记录为最近的10条消息
+	console.log(`Chat history for chat ID ${chatId}:`, messages);
+	return messages; // 返回聊天历史记录，包括角色和内容
 }
+
 // 修改注册逻辑，避免重复注册
 async function registerTelegramWebhook(workerUrl: string, env: Env): Promise<any> {
 	const webhookInfo = await getWebhookInfo(env);
@@ -135,11 +144,13 @@ async function getTelegramFileLink(fileId: string, env: Env): Promise<string> {
 }
 
 // 生成 AI 回复
-async function generateAIResponse(prompt: string, env: Env): Promise<string> {
+async function generateAIResponse(prompt: string, chatHistory: Array<{ role: string; text: string }>, env: Env): Promise<string> {
 	const workersai = createWorkersAI({ binding: env.AI });
+
+	// 拼接聊天历史作为上下文
 	const result = await generateText({
 		model: workersai(CHAT_MODEL), // 使用指定的 AI 模型
-		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在语音识别问题或者表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
+		prompt: `你是一个用户的好朋友，总能用幽默和温暖的方式陪伴他们。用户通过语音向你倾诉或聊天，内容可能存在表达不清楚的地方。请带着轻松和理解的态度，推断出用户的真实意图，给出既有趣又贴心的回复。以下是用户最近的聊天记录：${chatHistory},以下是用户当前的输入：${prompt}。`, // 把识别出的文本作为输入 Prompt
 	});
 
 	const response = result.text; // 获取完整的 AI 回复
@@ -151,11 +162,12 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 	try {
 		const chatId = update.message.chat.id;
 		const messageUrl = `https://api.telegram.org/bot${env.tg_token}/sendMessage`;
+		const chatHistory = await getChatHistory(chatId, env);
 		if (!update.message?.voice) {
 			const userText = update.message.text; // 读取文字内容
 
 			console.log('No voice message found');
-			const aiResponse = await generateAIResponse(userText, env);
+			const aiResponse = await generateAIResponse(userText, chatHistory, env);
 			const telegramResponse = await fetch(messageUrl, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -183,7 +195,7 @@ async function handleTelegramUpdate(update: any, env: Env): Promise<Response> {
 		const transcription = await transcribeAudio(blob, env);
 
 		// 基于转录结果生成 AI 回复
-		const aiResponse = await generateAIResponse(transcription, env);
+		const aiResponse = await generateAIResponse(transcription, chatHistory, env);
 
 		// 回复用户转录结果和 AI 回复内容
 
