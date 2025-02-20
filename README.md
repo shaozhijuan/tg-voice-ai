@@ -18,10 +18,12 @@ https://t.me/tg_voice_ai_bot 可以直接使用
    ```sh
    npm install
    wrangler login # 登录cf
+	wrangler kv namespace tgvoicechat # 创建kv
+	<!-- 修改 wrangler.json 中的 kv_namespaces 的 id 为上一步创建返回的 kv id  -->
    npm run deploy
    ```
 
-3. cf 配置环境变量 tg_token(botfather 给出的 token) 和 siliconflow_token（硅基的 api token 用于生成语音，因为 workers ai 没有 tts 功能）
+3. cf 配置环境变量（secret类型） tg_token(botfather 给出的 token) 和 siliconflow_token（硅基的 api token 用于生成语音，因为 workers ai 没有 tts 功能）
 4. 访问 worker 域名/init 进行电报 webhook 注册
 
 5. 与机器人聊天，支持语音和文字
